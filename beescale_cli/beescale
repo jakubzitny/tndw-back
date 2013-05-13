@@ -1,0 +1,184 @@
+#!/bin/bash
+# CLI interface for http://beescale.com
+# (c) 2012 Jakub Zitny <jzitny@oldanygroup.cz>
+
+# TODO: aby po zmazani isiel prec aj disk
+# TODO: platforms+listing s id ?? test
+
+HELP=0
+CURL=`which curl`
+
+function kill() {
+   echo "Failed.";
+   echo "Usage: $0 create [ubuntu/debian/centos]";
+   exit 2;
+}
+
+function help() {
+   echo "Commands and usage:"
+   echo "$0 [args] command [command-args]"
+   echo ""
+   echo "List of commands:"
+   echo -e " Basic commands:"
+   echo -e "  create\tcreates server in the cloud"
+   echo -e "  delete\tdeletes server in the cloud"
+   echo -e "  instances\tshows all servers available"
+   echo -e "  images\tshows all available platforms for deploying"
+   echo -e "  start\t\tstarts specified server"
+   echo -e "  connect\tconnects via ssh to server"
+   echo -e "  status\tshows the status of local and remote machine"
+   echo ""
+   echo -e " Delta cloud collections:"
+   echo -e "  images"
+   echo -e "  drivers"
+   echo -e "  hardware_profiles"
+   echo -e "  instance_states"
+   echo -e "  realms"
+   echo -e "  instances"
+   echo -e "  instance"
+   echo -e "  account"
+   echo ""
+   echo "List of available arguments:"
+   echo -e " -c filename\tattach credentials file"
+   echo -e " -h \t\tdisplays this help duh"
+   echo ""
+
+}
+
+function usage() {
+   echo "Usage: $0 [args] command [command-args]"
+   echo "See $0 -h for help."
+   exit $1
+}
+
+function loadCreds() {
+
+   if [ $CREDSFILE == "tmc" ]; then
+      CREDSFILE=$CREDSFILE_TMC
+   elif [ $CREDSFILE == "c4c" ]; then
+      CREDSFILE=$CREDSFILE_C4C
+   fi
+
+   if [ -f $CREDSFILE ]; then
+      . $CREDSFILE
+   else
+      usage
+      exit 4;
+   fi
+}
+
+function commands() {
+ # collections
+ if [ $1 == "images" ] || [ $1 == "im" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/images | grep name | sed -e 's/<[^>]*>//g'
+ elif [ $1 == "drivers" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/drivers
+ elif [ $1 == "hardware_profiles" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/hardware_profiles 
+ elif [ $1 == "instance_states" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instance_states 
+ elif [ $1 == "realms" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/realms 
+ elif [ $1 == "instances" ] || [ $1 == "list" ] || [ $1 == "li" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances | egrep "(instance href|<name>|<state>)" | grep -v "activated" | awk -F"'" '/instance/{print $4":"} /name/{print $0" ("} /state/{print $0" )~"}' | sed -e 's/<[^>]*>//g' | tr '\n' ' ' | sed 's/~\ /~/g' | tr '~' '\n' |  sed '/^$/d' 
+ elif [ $1 == "instance" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2;
+ elif [ $1 == "account" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/account | grep mail | sed -e 's/<[^>]*>//g'
+ elif [ $1 == "create" ]; then
+    # create
+    if [ -z $2 ]; then
+       usage 4
+    elif [ $2 == "ubuntu" ]; then
+       platform="platform-2";
+    elif [ $2 == "debian" ]; then
+       platform="platform-3";
+    elif [ $2 == "centos" ]; then
+       platform="platform-5";
+    elif [ $2 == "" ]; then
+       platform="platform-2";
+    elif [[ "$2" =~ platform-[0-9]*$ ]]; then
+      platform=$2;
+    else usage 4;
+    fi
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances -d "image_id=$platform" > /dev/null
+ elif [ $1 == "delete" ] || [ $1 == "de" ]; then
+    # delete
+    $CURL -s -X DELETE --user $USER:$TOKEN https://$DOMAIN/api/instances/$2/ > /dev/null
+ elif [ $1 == "start" ] || [ $1 == "st" ]; then
+    # start
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2/start -d '""' > /dev/null
+ elif [ $1 == "connect" ] || [ $1 == "co" ]; then
+    # connect
+    ip=$($CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2/ | grep '\<address\>' | sed 's/<[^>]*>//g')
+    ssh -o UserKnownHostsFile=/dev/null -o "StrictHostKeyChecking no" root@$ip
+ elif [ $1 == "blitzkrieg" ] || [ $1 == "bli" ]; then
+    # quick set up
+    echo -en "Creating.. ";
+    id=$($CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances -d "image_id=platform-2" | awk -F"'" '/instance href/{print $4}')
+    $0 -c $CREDSFILE start $id;
+    while [ $($0 -c $CREDSFILE instances | grep $id | grep 'pending' > /dev/null; echo $?) -eq 0 ];
+    do
+       echo -ne '/\010';
+       sleep 0.3;
+       echo -ne '-\010';
+       sleep 0.3;
+       echo -ne '\\\010';
+       sleep 0.3;
+       echo -ne '|\010';
+       sleep 0.3;
+    done
+    echo -en "\nLaunching.. ";
+    ip=$($CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$id/ | grep '\<address\>' | sed 's/<[^>]*>//g')
+    while [ $(ssh -o ConnectTimeout=2 -o UserKnownHostsFile=/dev/null -o "StrictHostKeyChecking no" root@$ip "true" > log 2>&1; echo $?) -ne 0 ];
+    do
+       echo -ne '/\010';
+       sleep 0.3;
+       echo -ne '-\010';
+       sleep 0.3;
+       echo -ne '\\\010';
+       sleep 0.3;
+       echo -ne '|\010';
+       sleep 0.3;
+    done
+    $0 -c $CREDSFILE connect $id;
+ elif [ $1 == "status" ]; then
+    # status
+    if ! [ $(ping -c 1 google.com >/dev/null 2>&1; echo $?) -eq 0 ]; then
+       echo "Connection failed..";
+       exit 3;
+    fi
+    if [ $(ping -c 1 $DOMAIN >/dev/null 2>&1; echo $?) -eq 0 ]; then
+       echo "$DOMAIN is up..";
+    fi
+ else
+   echo $1
+   usage 1
+ fi
+}
+
+function handleArgs() {
+
+   if [ -z $1 ]; then
+      usage 1
+   fi
+   while getopts hc: opt
+   do
+      case "$opt" in
+         c) export CREDSFILE=$OPTARG;;
+         h) help; exit 0;;
+        \?) usage 5;;
+      esac
+   done
+   shift `expr $OPTIND - 1`
+}
+
+function main() {
+   handleArgs "$@"
+   loadCreds
+   commands `echo "$@" | sed 's/-c\ [a-zA-Z._\/0-9]*//g;s/-[a-z]//g'`
+   exit 0
+}
+
+main "$@"
+

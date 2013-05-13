@@ -1,0 +1,13 @@
+#!/bin/bash
+while true;
+do 
+   echo -ne '/\010';
+   sleep 0.3;
+   echo -ne '-\010';
+   sleep 0.3;
+   echo -ne '\\\010';
+   sleep 0.3;
+   echo -ne '|\010';
+   sleep 0.3;
+done
+
