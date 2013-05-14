@@ -60,7 +60,7 @@ function loadCreds() {
    fi
 
    if [ -f $CREDSFILE ]; then
-      . $CREDSFILE
+	 source $CREDSFILE
    else
       usage
       exit 4;
@@ -70,7 +70,27 @@ function loadCreds() {
 function commands() {
  # collections
  if [ $1 == "images" ] || [ $1 == "im" ]; then
-    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/images | grep name | sed -e 's/<[^>]*>//g'
+    res="`$CURL -s --user $USER:$TOKEN https://$DOMAIN/api/images`"
+	names=$(echo "$res" | grep name | sed -e 's/<[^>]*>//g')
+	images=$(echo "$res" | grep -e 'image[!s]' | awk -F"'" '{print $4}')
+	declare -a names_array
+	declare -a images_array
+	i=0
+	while read -r line; do
+		names_array[$i]=$line
+		i=$((i+1))
+	done <<< "$names"
+	lines=$i
+	i=0
+	while read -r line; do
+		images_array[$i]=$line
+		i=$((i+1))
+	done <<< "$images"
+
+	for i in `seq 0 $((lines-1))`;
+	do
+		echo -e "${images_array[$i]}: \t ${names_array[$i]}"
+	done
  elif [ $1 == "drivers" ]; then
     $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/drivers
  elif [ $1 == "hardware_profiles" ]; then
@@ -82,7 +102,18 @@ function commands() {
  elif [ $1 == "instances" ] || [ $1 == "list" ] || [ $1 == "li" ]; then
     $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances | egrep "(instance href|<name>|<state>)" | grep -v "activated" | awk -F"'" '/instance/{print $4":"} /name/{print $0" ("} /state/{print $0" )~"}' | sed -e 's/<[^>]*>//g' | tr '\n' ' ' | sed 's/~\ /~/g' | tr '~' '\n' |  sed '/^$/d' 
  elif [ $1 == "instance" ]; then
-    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2;
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances | egrep "(instance href|<name>|<state>)" | grep -v "activated" | awk -F"'" '/instance/{print $4":"} /name/{print $0" ("} /state/{print $0" )~"}' | sed -e 's/<[^>]*>//g' | tr '\n' ' ' | sed 's/~\ /~/g' | tr '~' '\n' |  sed '/^$/d' | grep "$2"
+ elif [ $1 == "instance_raw" ]; then
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2
+ elif [ $1 == "instance_data" ]; then
+    raw_data=$($CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2)
+	user=$(echo "$raw_data" | grep username | sed -e 's/<[^>]*>//g' | head -2)
+	password=$(echo "$raw_data" | grep password | head -2 | tail -1 | sed -e 's/<[^>]*>//g')
+	address=$(echo "$raw_data" | grep address | sed -e 's/<[^>]*>//g' | head -2)
+	vnc_host=$(echo "$raw_data" | grep host | sed -e 's/<[^>]*>//g' | head -2)
+	vnc_port=$(echo "$raw_data" | grep port | sed -e 's/<[^>]*>//g' | head -2)
+	vnc_password=$(echo "$raw_data" | grep password | tail -1 | sed -e 's/<[^>]*>//g')
+	echo $user:$password:$address:$vnc_host:$vnc_port:$vnc_password | sed 's/\ //g'
  elif [ $1 == "account" ]; then
     $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/account | grep mail | sed -e 's/<[^>]*>//g'
  elif [ $1 == "create" ]; then
@@ -101,13 +132,19 @@ function commands() {
       platform=$2;
     else usage 4;
     fi
-    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances -d "image_id=$platform" > /dev/null
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances -d "image_id=$platform&cpu=1&memory=512" | awk -F"'" '/instance href/{print $4}'
  elif [ $1 == "delete" ] || [ $1 == "de" ]; then
     # delete
     $CURL -s -X DELETE --user $USER:$TOKEN https://$DOMAIN/api/instances/$2/ > /dev/null
  elif [ $1 == "start" ] || [ $1 == "st" ]; then
     # start
     $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2/start -d '""' > /dev/null
+ elif [ $1 == "togglevnc" ]; then
+    # toggle vnc
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2/vnc_on -d '""' > /dev/null
+ elif [ $1 == "vncstate" ]; then
+    # show vnc status
+    $CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2 | grep state | tail -1 | sed -e 's/<[^>]*>//g'
  elif [ $1 == "connect" ] || [ $1 == "co" ]; then
     # connect
     ip=$($CURL -s --user $USER:$TOKEN https://$DOMAIN/api/instances/$2/ | grep '\<address\>' | sed 's/<[^>]*>//g')
@@ -158,10 +195,6 @@ function commands() {
 }
 
 function handleArgs() {
-
-   if [ -z $1 ]; then
-      usage 1
-   fi
    while getopts hc: opt
    do
       case "$opt" in
@@ -171,12 +204,15 @@ function handleArgs() {
       esac
    done
    shift `expr $OPTIND - 1`
+   if [ -z $1 ]; then
+      usage 1
+   fi
 }
 
 function main() {
    handleArgs "$@"
    loadCreds
-   commands `echo "$@" | sed 's/-c\ [a-zA-Z._\/0-9]*//g;s/-[a-z]//g'`
+   commands `echo "$@" | sed 's/-c\ [a-zA-Z._\/0-9\-]*//g;s/-[a-z]//g'`
    exit 0
 }
 
